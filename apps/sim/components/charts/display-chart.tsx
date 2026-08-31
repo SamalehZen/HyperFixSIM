@@ -10,7 +10,7 @@ import {
 import { displayChart, DEFAULT_DATE_FORMAT_SETTINGS } from '@/lib/nao-charts'
 import { useChartWidth } from './use-chart-theme'
 import { cn } from '@sim/emcn'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from '@sim/emcn'
 import type React from 'react'
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Customized } from 'recharts'
