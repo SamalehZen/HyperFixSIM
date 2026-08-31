@@ -504,8 +504,22 @@ async function consumeNao(
         if (p && real) p.toolName = real
         if (p) p.input = d?.input
         // Re-émettre le call avec les arguments complets (le turn model sim
-        // stocke payload.arguments → params pour le rendu chart)
+        // stocke payload.arguments → params pour le rendu chart). Pour
+        // display_chart on joint DÈS LE CALL les rows execute_sql résolues
+        // (l'execute_sql a toujours terminé avant le display_chart), car le
+        // reducer sim n'applique arguments que sur la phase call.
         const toolNameNow = p?.toolName || (d?.input?.tool as string) || 'tool'
+        let callArgs: unknown = d?.input
+        if (toolNameNow === 'display_chart') {
+          const cfg = (d?.input ?? {}) as Record<string, unknown>
+          const queryId = cfg.query_id as string | undefined
+          const sqlEntry = queryId ? sqlResults.get(queryId) : undefined
+          callArgs = {
+            ...cfg,
+            __chartData: sqlEntry?.rows ?? [],
+            __chartColumns: sqlEntry?.columns ?? [],
+          }
+        }
         emit('tool', {
           phase: 'call',
           toolCallId: id,
@@ -513,7 +527,7 @@ async function consumeNao(
           executor: 'sim',
           mode: 'sync',
           status: 'executing',
-          arguments: d?.input,
+          arguments: callArgs,
         })
       } else if (t === 'tool-output-available') {
         const id = d?.toolCallId as string
@@ -549,14 +563,9 @@ async function consumeNao(
               : (output?.text ?? output?.content ?? JSON.stringify(output ?? {}).slice(0, 800))
           outPayload = textOut
         }
-        // display_chart: joindre la data de l'execute_sql référencé (query_id)
-        // pour que le composant chart ait rows+config dans un seul event.
+        // display_chart: le chartData a déjà été joint au call (voir
+        // tool-input-available). Le result reste un simple succès.
         if (toolName === 'display_chart') {
-          const cfg = p?.input as Record<string, unknown> | undefined
-          const queryId = cfg?.query_id as string | undefined
-          const sqlEntry = queryId ? sqlResults.get(queryId) : undefined
-          const chartData: unknown[] = sqlEntry?.rows ?? []
-          const chartColumns: string[] = sqlEntry?.columns ?? []
           emit('tool', {
             phase: 'result',
             toolCallId: id,
@@ -566,7 +575,6 @@ async function consumeNao(
             success: true,
             status: 'success',
             output: { success: true },
-            arguments: { ...cfg, __chartData: chartData, __chartColumns: chartColumns },
           })
           pendingTools.delete(id)
           continue
