@@ -151,6 +151,11 @@ export function stripToolResultOutput(message: PersistedMessage): PersistedMessa
     const result = toolCall?.result
     if (!toolCall || !result || typeof result !== 'object' || !('output' in result)) return block
     const output = result.output
+    // Nao charts (adaptateur): les params portent __chartData/__chartColumns
+    // résolus par l'adaptateur — l'output doit rester intact pour rejouer le graphique.
+    const params = toolCall.params as Record<string, unknown> | undefined
+    if (toolCall.name === 'display_chart' && params && '__chartData' in params) return block
+    if (toolCall.name === 'execute_sql' && isPlainRecord(output) && 'data' in output) return block
     const userInstruction =
       toolCall.name === RETIRED_BROWSER_REQUEST_TAKEOVER_ID && isPlainRecord(output)
         ? output.userInstruction

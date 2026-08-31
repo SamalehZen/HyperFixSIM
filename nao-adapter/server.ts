@@ -99,7 +99,8 @@ async function persistSimTurn(
   simEmail: string,
   streamId: string,
   userText: string,
-  assistantText: string
+  assistantText: string,
+  toolBlocks?: { id: string; name: string; params?: unknown; output?: unknown; success?: boolean }[]
 ): Promise<void> {
   if (!DATABASE_URL || !chatId || !simEmail) return
   if (!userText.trim() && !assistantText.trim()) return
@@ -131,7 +132,27 @@ async function persistSimTurn(
     }
     if (assistantText.trim()) {
       const aid = crypto.randomUUID()
-      const asstContent = { id: aid, role: 'assistant', content: assistantText, timestamp: now }
+      const blocks: Record<string, unknown>[] = []
+      for (const b of toolBlocks ?? []) {
+        if (!b.id) continue
+        blocks.push({
+          type: 'tool_call',
+          toolCall: {
+            id: b.id,
+            name: b.name,
+            state: b.success === false ? 'error' : 'success',
+            ...(b.params ? { params: b.params } : {}),
+            ...(b.output !== undefined ? { result: { success: b.success !== false, output: b.output } } : {}),
+          },
+        })
+      }
+      const asstContent: Record<string, unknown> = {
+        id: aid,
+        role: 'assistant',
+        content: assistantText,
+        timestamp: now,
+        ...(blocks.length > 0 ? { contentBlocks: blocks } : {}),
+      }
       await db`
         INSERT INTO copilot_messages (chat_id, message_id, role, content, stream_id, seq, model, created_at, updated_at)
         VALUES (${chatId}, ${aid}, 'assistant', ${asstContent}, ${streamId}, ${base + 1}, 'nao', NOW(), NOW())
@@ -673,11 +694,24 @@ Bun.serve({
       // Résolution session + login DANS le stream → première réponse immédiatement (headers déjà envoyés)
       // Wrapper emit pour capturer le texte assistant (persistance historique Sim)
       let assistantBuf = ''
+      const toolBlocks: { id: string; name: string; params?: unknown; output?: unknown; success?: boolean }[] = []
       const consume = async (emitRaw: (type: string, payload: unknown) => void) => {
         const emit = (type: string, payload: unknown) => {
           if (type === 'text') {
             const p = payload as { channel?: string; text?: string }
             if (p?.channel === 'assistant' && typeof p.text === 'string') assistantBuf += p.text
+          }
+          if (type === 'tool') {
+            const p = payload as { phase?: string; toolCallId?: string; toolName?: string; arguments?: unknown; output?: unknown; success?: boolean }
+            if (p?.phase === 'call') {
+              toolBlocks.push({ id: p.toolCallId ?? '', name: p.toolName ?? '', params: p.arguments })
+            } else if (p?.phase === 'result') {
+              const last = [...toolBlocks].reverse().find((b) => b.id === (p.toolCallId ?? ''))
+              if (last) {
+                last.output = p.output
+                last.success = p.success
+              }
+            }
           }
           emitRaw(type, payload)
         }
@@ -708,7 +742,14 @@ Bun.serve({
           finalChatId = await consumeNao(text, streamId, chatId, emit, naoEmail, naoPassword)
         }
         // Historique rejouable côté Sim (messages user + assistant)
-        void persistSimTurn(finalChatId, simEmail || naoEmail, streamId, text, assistantBuf)
+        void persistSimTurn(
+          finalChatId,
+          simEmail || naoEmail,
+          streamId,
+          text,
+          assistantBuf,
+          toolBlocks.filter((b) => b.name === 'display_chart' || b.name === 'execute_sql')
+        )
       }
 
       const stream = sseStream(streamId, chatId, consume)
