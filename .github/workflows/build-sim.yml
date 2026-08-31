@@ -1,0 +1,46 @@
+name: Build Sim Custom
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-sim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-app:
+    name: Build simstudio image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/app.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/samalehzen/hyperfixsim/sim-custom:latest
+            ghcr.io/samalehzen/hyperfixsim/sim-custom:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
