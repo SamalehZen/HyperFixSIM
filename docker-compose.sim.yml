@@ -5,7 +5,7 @@ services:
         required: false
     # app, realtime and migrations share a database schema and must move together,
     # so one variable drives all three. Set SIM_VERSION in .env to upgrade.
-    image: ghcr.io/simstudioai/simstudio:${SIM_VERSION:-latest}
+    image: ghcr.io/samalehzen/hyperfixsim/sim-custom:latest
     restart: unless-stopped
     ports:
       - '3000:3000'

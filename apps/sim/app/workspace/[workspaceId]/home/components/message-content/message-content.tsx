@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { cn } from '@sim/emcn'
+import { DisplayChartView } from '@/components/charts/display-chart'
 import { PrepareFileEdit, Read as ReadTool } from '@/lib/copilot/generated/tool-catalog-v1'
 import { isToolHiddenInUi } from '@/lib/copilot/tools/client/hidden-tools'
 import { resolveToolDisplay } from '@/lib/copilot/tools/client/store-utils'
@@ -67,7 +68,19 @@ interface StoppedSegment {
   type: 'stopped'
 }
 
-type MessageSegment = TextSegment | AgentGroupSegment | OptionsSegment | StoppedSegment
+interface NaoChartSegment {
+  type: 'nao_chart'
+  id: string
+  config: Record<string, unknown>
+  data: Record<string, unknown>[]
+}
+
+type MessageSegment =
+  | TextSegment
+  | AgentGroupSegment
+  | OptionsSegment
+  | StoppedSegment
+  | NaoChartSegment
 
 function getAgentGroupActivityKey(items: AgentGroupItem[]): string {
   return items
@@ -240,6 +253,24 @@ function appendTextItem(group: AgentGroupSegment, content: string): void {
  * no name/tool-call reverse lookups. Delegation tool_calls are absorbed — the
  * subagent span is the canonical representation of the nested agent.
  */
+/** display_chart nao avec rows résolues (__chartData) → segment inline dans le flux principal. */
+function extractNaoChart(tc: NonNullable<ContentBlock['toolCall']>): NaoChartSegment | null {
+  if (tc.name !== 'display_chart' || tc.result?.success !== true) return null
+  const params = tc.params as Record<string, unknown> | undefined
+  if (!params) return null
+  const chartData = params.__chartData
+  if (!Array.isArray(chartData) || chartData.length === 0) return null
+  const config: Record<string, unknown> = { ...params }
+  delete config.__chartData
+  delete config.__chartColumns
+  return {
+    type: 'nao_chart',
+    id: `nao-chart-${tc.id}`,
+    config,
+    data: chartData as Record<string, unknown>[],
+  }
+}
+
 function parseBlocksWithSpanTree(blocks: ContentBlock[]): MessageSegment[] {
   const segments: MessageSegment[] = []
   const groupsBySpanId = new Map<string, AgentGroupSegment>()
@@ -406,6 +437,11 @@ function parseBlocksWithSpanTree(blocks: ContentBlock[]): MessageSegment[] {
       if (!block.toolCall) continue
       const tc = block.toolCall
       if (isHiddenToolCall(tc.name)) continue
+      const naoChart = extractNaoChart(tc)
+      if (naoChart) {
+        segments.push(naoChart)
+        continue
+      }
       if (tc.name === ReadTool.id && isToolResultRead(tc.params)) continue
       // Delegation tools are represented by their subagent span group; absorb.
       if (SUBAGENT_KEYS.has(tc.name)) continue
@@ -661,6 +697,13 @@ function parseBlocksLegacy(blocks: ContentBlock[]): MessageSegment[] {
         const { group: g } = ensureGroup(tc.name, tc.id)
         g.isDelegating = isDelegatingTool(tc)
         g.isOpen = g.isDelegating
+        continue
+      }
+
+      const naoChart = extractNaoChart(tc)
+      if (naoChart) {
+        flushLanes()
+        segments.push(naoChart)
         continue
       }
 
@@ -987,6 +1030,20 @@ function MessageContentInner({
                 </div>
               )
             }
+            case 'nao_chart':
+              return (
+                <div
+                  key={segment.id}
+                  className={
+                    'pl-6 pr-2 my-1' + (isStreaming ? ' animate-stream-fade-in' : '')
+                  }
+                >
+                  <DisplayChartView
+                    config={segment.config as never}
+                    data={segment.data}
+                  />
+                </div>
+              )
             case 'options':
               return (
                 <div
