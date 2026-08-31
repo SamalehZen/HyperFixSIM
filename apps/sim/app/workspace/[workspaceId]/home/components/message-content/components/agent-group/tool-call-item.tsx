@@ -1,4 +1,6 @@
+import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { DisplayChartView } from '@/components/charts/display-chart'
 import { isPlainRecord } from '@sim/utils/object'
 import { ShimmerText } from '@/components/ui'
 import {
@@ -238,17 +240,65 @@ export function ToolCallItem({
   }
 
   return (
-    <div className='flex min-w-0 items-center gap-[6px] pl-6'>
-      {BlockIcon && <BrandIcon icon={BlockIcon} className='size-[14px] flex-shrink-0' />}
-      {isExecuting ? (
-        <ShimmerText className='min-w-0 truncate text-[13px] leading-[18px] [--shimmer-rest:var(--text-secondary)]'>
-          {title}
-        </ShimmerText>
-      ) : (
-        <span className='min-w-0 truncate text-[13px] text-[var(--text-secondary)] leading-[18px]'>
-          {title}
-        </span>
-      )}
+    <div className='flex flex-col gap-1'>
+      <div className='flex min-w-0 items-center gap-[6px] pl-6'>
+        {BlockIcon && <BrandIcon icon={BlockIcon} className='size-[14px] flex-shrink-0' />}
+        {isExecuting ? (
+          <ShimmerText className='min-w-0 truncate text-[13px] leading-[18px] [--shimmer-rest:var(--text-secondary)]'>
+            {title}
+          </ShimmerText>
+        ) : (
+          <span className='min-w-0 truncate text-[13px] text-[var(--text-secondary)] leading-[18px]'>
+            {title}
+          </span>
+        )}
+      </div>
+      {toolName === 'display_chart' && status === 'success' && renderNaoChart(params, result)}
     </div>
   )
+}
+
+/** Rend le graphique nao (config display_chart + rows execute_sql résolues côté adaptateur). */
+function renderNaoChart(
+  params?: Record<string, unknown>,
+  result?: ToolCallData['result']
+): React.ReactNode {
+  if (!params || !result || result.success !== true) return null
+  const out = result.output as Record<string, unknown> | undefined
+  if (!out || out.success !== true) return null
+  const args = params as Record<string, unknown> & {
+    __chartData?: unknown[]
+    __chartColumns?: string[]
+    chart_type?: string
+  }
+  const chartData = args.__chartData
+  if (!Array.isArray(chartData) || chartData.length === 0) return null
+  const chartColumns = Array.isArray(args.__chartColumns) ? args.__chartColumns : []
+  const config = { ...args }
+  delete config.__chartData
+  delete config.__chartColumns
+  return (
+    <div className='pl-6 pr-2'>
+      <NaoChartBoundary config={config} data={chartData} columns={chartColumns} />
+    </div>
+  )
+}
+
+function NaoChartBoundary(props: {
+  config: Record<string, unknown>
+  data: unknown[]
+  columns: string[]
+}) {
+  try {
+    const cfg = props.config as unknown as Record<string, unknown> & { __displayChart?: never }
+    return (
+      <DisplayChartView
+        config={cfg as never}
+        data={props.data as Record<string, unknown>[]}
+        columns={props.columns}
+      />
+    )
+  } catch {
+    return null
+  }
 }

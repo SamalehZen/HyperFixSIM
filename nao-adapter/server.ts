@@ -414,7 +414,12 @@ async function consumeNao(
   let sentSession = false
   let sentComplete = false
   // Suivi des appels d'outils (AI SDK UI tool-input-* / tool-output-*)
-  const pendingTools = new Map<string, { toolName: string; args: string }>()
+  const pendingTools = new Map<
+    string,
+    { toolName: string; args: string; input?: Record<string, unknown> }
+  >()
+  // Résolution display_chart → rows execute_sql (survit au delete des pendingTools)
+  const sqlResults = new Map<string, { rows: unknown[]; columns: string[] }>()
 
   while (true) {
     const { done, value } = await reader.read()
@@ -476,15 +481,75 @@ async function consumeNao(
         const real = d?.input?.tool as string | undefined
         const p = pendingTools.get(id)
         if (p && real) p.toolName = real
+        if (p) p.input = d?.input
+        // Re-émettre le call avec les arguments complets (le turn model sim
+        // stocke payload.arguments → params pour le rendu chart)
+        const toolNameNow = p?.toolName || (d?.input?.tool as string) || 'tool'
+        emit('tool', {
+          phase: 'call',
+          toolCallId: id,
+          toolName: toolNameNow,
+          executor: 'sim',
+          mode: 'sync',
+          status: 'executing',
+          arguments: d?.input,
+        })
       } else if (t === 'tool-output-available') {
         const id = d?.toolCallId as string
         const p = pendingTools.get(id)
         const toolName = p?.toolName || (d?.toolName as string) || 'tool'
         const output = d?.output
-        const textOut =
-          typeof output === 'string'
-            ? output
-            : (output?.text ?? output?.content ?? JSON.stringify(output ?? {}).slice(0, 800))
+        // execute_sql: output = { data: rows[], columns, id: query_id } — passer
+        // l'objet BRUT au front sim (turn model → ToolCallData.result.output)
+        // pour que le rendu display_chart résolve query_id → rows.
+        const isExecuteSql = toolName === 'execute_sql'
+        let outPayload: unknown
+        if (
+          isExecuteSql &&
+          output &&
+          typeof output === 'object' &&
+          Array.isArray((output as any).data)
+        ) {
+          outPayload = output
+          if (typeof (output as any).id === 'string') {
+            if (sqlResults.size > 50) {
+              const firstKey = sqlResults.keys().next().value
+              if (firstKey !== undefined) sqlResults.delete(firstKey)
+            }
+            sqlResults.set((output as any).id, {
+              rows: (output as any).data,
+              columns: (output as any).columns ?? [],
+            })
+          }
+        } else {
+          const textOut =
+            typeof output === 'string'
+              ? output
+              : (output?.text ?? output?.content ?? JSON.stringify(output ?? {}).slice(0, 800))
+          outPayload = textOut
+        }
+        // display_chart: joindre la data de l'execute_sql référencé (query_id)
+        // pour que le composant chart ait rows+config dans un seul event.
+        if (toolName === 'display_chart') {
+          const cfg = p?.input as Record<string, unknown> | undefined
+          const queryId = cfg?.query_id as string | undefined
+          const sqlEntry = queryId ? sqlResults.get(queryId) : undefined
+          const chartData: unknown[] = sqlEntry?.rows ?? []
+          const chartColumns: string[] = sqlEntry?.columns ?? []
+          emit('tool', {
+            phase: 'result',
+            toolCallId: id,
+            toolName,
+            executor: 'sim',
+            mode: 'sync',
+            success: true,
+            status: 'success',
+            output: { success: true },
+            arguments: { ...cfg, __chartData: chartData, __chartColumns: chartColumns },
+          })
+          pendingTools.delete(id)
+          continue
+        }
         emit('tool', {
           phase: 'result',
           toolCallId: id,
@@ -493,7 +558,7 @@ async function consumeNao(
           mode: 'sync',
           success: true,
           status: 'success',
-          output: textOut,
+          output: outPayload,
         })
         pendingTools.delete(id)
       } else if (t === 'tool-output-error') {
