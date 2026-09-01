@@ -117,6 +117,8 @@ function getVisibleStreamActivityKey(segments: MessageSegment[]): string {
   return segments
     .map((segment) => {
       if (segment.type === 'text') return `text:${segment.id}:${segment.content.length}`
+      if (segment.type === 'nao_chart')
+        return `nao_chart:${segment.id}:${segment.data.length}:${JSON.stringify(segment.config).length}`
       if (segment.type === 'options') {
         return `options:${segment.items.map((item) => `${item.id}:${item.label.length}`).join(',')}`
       }
